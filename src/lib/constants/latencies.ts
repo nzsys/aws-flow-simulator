@@ -1,0 +1,17 @@
+export const AWS_LATENCIES = {
+  route53: { min: 1, base: 3, max: 10 },
+  cloudfront: { min: 5, base: 20, max: 80 },
+  alb: { min: 1, base: 5, max: 15 },
+  nlb: { min: 0.5, base: 3, max: 10 },
+  'api-gateway': { min: 10, base: 30, max: 100 },
+  ecs: { min: 10, base: 50, max: 200 },
+  ec2: { min: 10, base: 50, max: 200 },
+  lambda: { min: 20, base: 100, max: 500 },
+  s3: { min: 5, base: 15, max: 50 },
+  rds: { min: 1, base: 3, max: 20 },
+  dynamodb: { min: 1, base: 5, max: 25 },
+  elasticache: { min: 0.1, base: 1, max: 5 },
+  waf: { min: 0.5, base: 2, max: 5 },
+  shield: { min: 0, base: 0, max: 1 },
+  'nat-gateway': { min: 0.5, base: 1, max: 5 },
+} as const

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+var/
+.env
+.env.local
+.claude/
+docs/
+CLAUDE.md
+tsconfig.tsbuildinfo

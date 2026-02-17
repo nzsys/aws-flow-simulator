@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { PRESET_ARCHITECTURES } from './presets'
+import type { PresetScale } from './presets'
 import { canConnect } from '@/lib/validation/connection-validator'
 import { canNestIn } from '@/lib/constants/services'
 import { validateArchitecture } from '@/lib/validation/validator'
@@ -7,8 +8,8 @@ import { getConnectionProtocol } from '@/lib/validation/rules'
 import type { AWSServiceType } from '@/types'
 
 describe('PRESET_ARCHITECTURES', () => {
-  it('contains exactly 9 presets', () => {
-    expect(PRESET_ARCHITECTURES).toHaveLength(9)
+  it('contains exactly 15 presets', () => {
+    expect(PRESET_ARCHITECTURES).toHaveLength(15)
   })
 
   it('each preset has unique ID', () => {
@@ -22,6 +23,14 @@ describe('PRESET_ARCHITECTURES', () => {
       expect(preset.description).toBeTruthy()
       expect(preset.nodes.length).toBeGreaterThan(0)
       expect(preset.edges.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('each preset has scale and scaleDescription', () => {
+    const validScales: readonly PresetScale[] = ['S', 'M', 'L', 'XL']
+    for (const preset of PRESET_ARCHITECTURES) {
+      expect(validScales).toContain(preset.scale)
+      expect(preset.scaleDescription).toBeTruthy()
     }
   })
 
@@ -128,6 +137,87 @@ describe('PRESET_ARCHITECTURES', () => {
     }
   })
 
+  // ── Individual preset tests ──
+
+  it('Static Website preset is minimal with 3 nodes', () => {
+    const preset = PRESET_ARCHITECTURES.find((p) => p.id === 'preset-static-website')
+    expect(preset).toBeDefined()
+    const types = preset!.nodes.map((n) => n.data.serviceType)
+    expect(types).toContain('route53')
+    expect(types).toContain('cloudfront')
+    expect(types).toContain('s3')
+    expect(preset!.nodes).toHaveLength(3)
+    expect(preset!.edges).toHaveLength(2)
+    expect(preset!.scale).toBe('S')
+  })
+
+  it('Queue Worker preset contains SQS and VPC-based ECS worker', () => {
+    const preset = PRESET_ARCHITECTURES.find((p) => p.id === 'preset-queue-worker')
+    expect(preset).toBeDefined()
+    const types = preset!.nodes.map((n) => n.data.serviceType)
+    expect(types).toContain('api-gateway')
+    expect(types).toContain('lambda')
+    expect(types).toContain('sqs')
+    expect(types).toContain('ecs')
+    expect(types).toContain('rds')
+    expect(preset!.nodes).toHaveLength(8)
+    expect(preset!.edges).toHaveLength(5)
+    expect(preset!.scale).toBe('M')
+  })
+
+  it('High-Performance TCP preset uses NLB', () => {
+    const preset = PRESET_ARCHITECTURES.find((p) => p.id === 'preset-high-perf-tcp')
+    expect(preset).toBeDefined()
+    const types = preset!.nodes.map((n) => n.data.serviceType)
+    expect(types).toContain('nlb')
+    expect(types).toContain('ecs')
+    expect(types).toContain('rds')
+    expect(types).toContain('elasticache')
+    expect(preset!.nodes).toHaveLength(8)
+    expect(preset!.edges).toHaveLength(4)
+    expect(preset!.scale).toBe('M')
+  })
+
+  it('Real-time Data Pipeline preset uses Kinesis streaming', () => {
+    const preset = PRESET_ARCHITECTURES.find((p) => p.id === 'preset-realtime-pipeline')
+    expect(preset).toBeDefined()
+    const types = preset!.nodes.map((n) => n.data.serviceType)
+    expect(types).toContain('kinesis')
+    expect(types).toContain('dynamodb')
+    expect(types).toContain('s3')
+    expect(preset!.nodes).toHaveLength(7)
+    expect(preset!.edges).toHaveLength(6)
+    expect(preset!.scale).toBe('M')
+  })
+
+  it('Fan-out Notification preset uses SNS fan-out to multiple SQS queues', () => {
+    const preset = PRESET_ARCHITECTURES.find((p) => p.id === 'preset-fanout-notification')
+    expect(preset).toBeDefined()
+    const types = preset!.nodes.map((n) => n.data.serviceType)
+    expect(types).toContain('sns')
+    expect(types).toContain('sqs')
+    expect(types).toContain('dynamodb')
+    const sqsCount = types.filter((t) => t === 'sqs').length
+    expect(sqsCount).toBe(2)
+    expect(preset!.nodes).toHaveLength(9)
+    expect(preset!.edges).toHaveLength(8)
+    expect(preset!.scale).toBe('L')
+  })
+
+  it('CQRS Read/Write Split preset separates read and write paths', () => {
+    const preset = PRESET_ARCHITECTURES.find((p) => p.id === 'preset-cqrs-read-write')
+    expect(preset).toBeDefined()
+    const types = preset!.nodes.map((n) => n.data.serviceType)
+    expect(types).toContain('dynamodb')
+    expect(types).toContain('kinesis')
+    expect(types).toContain('elasticache')
+    const lambdaCount = types.filter((t) => t === 'lambda').length
+    expect(lambdaCount).toBe(3)
+    expect(preset!.nodes).toHaveLength(8)
+    expect(preset!.edges).toHaveLength(8)
+    expect(preset!.scale).toBe('L')
+  })
+
   it('EKS Microservices preset contains EKS service', () => {
     const eksPreset = PRESET_ARCHITECTURES.find((p) => p.id === 'preset-eks-microservices')
     expect(eksPreset).toBeDefined()
@@ -148,17 +238,15 @@ describe('PRESET_ARCHITECTURES', () => {
     expect(edPreset!.edges.length).toBe(9)
   })
 
-  it('Enterprise E-Commerce preset uses 18 services with 14 edges', () => {
+  it('Enterprise E-Commerce preset uses 18 services with 15 edges', () => {
     const eecPreset = PRESET_ARCHITECTURES.find((p) => p.id === 'preset-enterprise-ecommerce')
     expect(eecPreset).toBeDefined()
     const serviceTypes = eecPreset!.nodes.map((n) => n.data.serviceType)
     const uniqueTypes = new Set(serviceTypes)
 
-    // 18 unique service types, 20 nodes total (subnet x3)
     expect(uniqueTypes.size).toBe(18)
     expect(eecPreset!.nodes).toHaveLength(20)
 
-    // Flow services
     expect(serviceTypes).toContain('route53')
     expect(serviceTypes).toContain('cloudfront')
     expect(serviceTypes).toContain('waf')
@@ -174,13 +262,10 @@ describe('PRESET_ARCHITECTURES', () => {
     expect(serviceTypes).toContain('sns')
     expect(serviceTypes).toContain('kinesis')
     expect(serviceTypes).toContain('ec2')
-
-    // Infrastructure services
     expect(serviceTypes).toContain('vpc')
     expect(serviceTypes).toContain('subnet')
     expect(serviceTypes).toContain('nat-gateway')
 
-    // 15 edges
     expect(eecPreset!.edges).toHaveLength(15)
   })
 
@@ -216,7 +301,6 @@ describe('PRESET_ARCHITECTURES', () => {
     expect(serviceTypes).toContain('elasticache')
     expect(serviceTypes).toContain('nat-gateway')
 
-    // Lambda is inside VPC (has parentId through subnet)
     const lambdaNode = sfsPreset!.nodes.find((n) => n.data.serviceType === 'lambda')
     expect(lambdaNode!.parentId).toBeDefined()
 

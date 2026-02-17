@@ -1,8 +1,12 @@
 import { useSimulationStore } from '@/store/simulation'
+import { useUIStore } from '@/store/ui'
 import { PerformanceMetrics } from './PerformanceMetrics'
 import { CostBreakdown } from './CostBreakdown'
 import { SecurityScore } from './SecurityScore'
 import { ValidationPanel } from './ValidationPanel'
+import { LatencyBreakdown } from './LatencyBreakdown'
+import { ScalabilityPanel } from './ScalabilityPanel'
+import { OperationalCost } from './OperationalCost'
 import type { AvailabilityResult } from '@/types'
 import { memo } from 'react'
 
@@ -58,6 +62,8 @@ const AvailabilityCard = memo(AvailabilityCardComponent)
 
 export function ResultsDashboard() {
   const results = useSimulationStore((s) => s.results)
+  const advancedMode = useUIStore((s) => s.advancedMode)
+  const toggleAdvancedMode = useUIStore((s) => s.toggleAdvancedMode)
 
   if (!results) {
     return (
@@ -69,7 +75,21 @@ export function ResultsDashboard() {
 
   return (
     <div className="rounded-lg bg-white p-4 shadow">
-      <h2 className="mb-4 text-base font-semibold text-slate-800">Simulation Results</h2>
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-base font-semibold text-slate-800">Simulation Results</h2>
+        <button
+          type="button"
+          onClick={toggleAdvancedMode}
+          className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+            advancedMode
+              ? 'bg-indigo-600 text-white'
+              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+          }`}
+        >
+          {advancedMode ? 'Advanced' : 'Normal'}
+        </button>
+      </div>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <PerformanceMetrics performance={results.performance} />
         <CostBreakdown cost={results.cost} />
@@ -77,6 +97,22 @@ export function ResultsDashboard() {
         <AvailabilityCard availability={results.availability} />
         {results.validation && <ValidationPanel validation={results.validation} />}
       </div>
+
+      {advancedMode && results.advanced && (
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <LatencyBreakdown latencyBreakdown={results.advanced.latencyBreakdown} />
+          <ScalabilityPanel scalability={results.advanced.scalability} />
+          <OperationalCost operationalCost={results.advanced.operationalCost} />
+        </div>
+      )}
+
+      {advancedMode && !results.advanced && (
+        <div className="mt-4 flex items-center justify-center rounded-lg border border-dashed border-indigo-300 bg-indigo-50 px-6 py-8">
+          <p className="text-sm text-indigo-600">
+            Advanced モードで再実行してください
+          </p>
+        </div>
+      )}
     </div>
   )
 }

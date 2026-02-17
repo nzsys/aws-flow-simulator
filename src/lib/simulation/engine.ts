@@ -5,20 +5,15 @@ import type {
   CostResult,
   SecurityResult,
   AvailabilityResult,
-  ServiceConfig,
   AWSServiceType,
 } from '@/types'
 import type { Node, Edge } from '@xyflow/react'
-import { isInfrastructureService } from '@/lib/constants/services'
 import { validateArchitecture } from '@/lib/validation/validator'
+import { calculateAdvancedResults } from './advanced'
+import { getNodeData, getNodeConfig, getServiceType, isFlowNode } from './node-helpers'
 
-// --- Node Data Types ---
-
-type ServiceNodeData = {
-  readonly serviceType: AWSServiceType
-  readonly config: ServiceConfig
-  readonly label: string
-  readonly [key: string]: unknown
+export type SimulationOptions = {
+  readonly advancedMode?: boolean
 }
 
 // --- Topological Sort ---
@@ -88,20 +83,6 @@ export function topologicalSort(nodes: readonly Node[], edges: readonly Edge[]):
   return sorted
 }
 
-// --- Node Data Helpers ---
-
-function getNodeData(node: Node): ServiceNodeData {
-  return node.data as ServiceNodeData
-}
-
-function getNodeConfig(node: Node): ServiceConfig {
-  return getNodeData(node).config
-}
-
-function getServiceType(node: Node): AWSServiceType {
-  return getNodeData(node).serviceType
-}
-
 const SECURE_PROTOCOLS = new Set(['https', 'http', 'tcp', 'udp', 'dns', 'invoke', 'inline'])
 
 function isEdgeSecure(edge: Edge): boolean {
@@ -109,10 +90,6 @@ function isEdgeSecure(edge: Edge): boolean {
   const protocol = data?.protocol ?? (edge as unknown as Record<string, unknown>).protocol
   if (typeof protocol !== 'string') return true
   return SECURE_PROTOCOLS.has(protocol)
-}
-
-function isFlowNode(node: Node): boolean {
-  return !isInfrastructureService(getServiceType(node))
 }
 
 // --- Performance Calculation ---
@@ -156,17 +133,31 @@ export function calculatePerformance(
 
 // --- Cost Calculation ---
 
+function calculateDynamoDBRequestCost(
+  requestsPerMonth: number,
+  readWriteRatio: number,
+): number {
+  const readCostPerMillion = 0.25
+  const writeCostPerMillion = 1.25
+  const millions = requestsPerMonth / 1_000_000
+  return millions * (readWriteRatio * readCostPerMillion + (1 - readWriteRatio) * writeCostPerMillion)
+}
+
 function calculateNodeCost(
   node: Node,
   effectiveRequestsPerSecond: number,
   traffic: TrafficProfile,
 ): { readonly amount: number; readonly remainingFactor: number } {
   const config = getNodeConfig(node)
+  const serviceType = getServiceType(node)
 
   const requestsPerMonth = effectiveRequestsPerSecond * 30 * 24 * 3600
   const dataTransferGB = (requestsPerMonth * traffic.averagePayloadSize) / (1024 * 1024)
 
-  const perRequestCost = (config.cost.perRequest ?? 0) * requestsPerMonth
+  const perRequestCost =
+    serviceType === 'dynamodb'
+      ? calculateDynamoDBRequestCost(requestsPerMonth, traffic.readWriteRatio)
+      : (config.cost.perRequest ?? 0) * requestsPerMonth
   const perGBCost = (config.cost.perGB ?? 0) * dataTransferGB
   const monthlyCost = config.cost.monthly ?? 0
   const totalCost = perRequestCost + perGBCost + monthlyCost
@@ -342,6 +333,7 @@ export function runSimulation(
   nodes: readonly Node[],
   edges: readonly Edge[],
   traffic: TrafficProfile,
+  options?: SimulationOptions,
 ): SimulationResult {
   const orderedNodes = topologicalSort(nodes, edges)
 
@@ -360,11 +352,16 @@ export function runSimulation(
     edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
   )
 
+  const advanced = options?.advancedMode
+    ? calculateAdvancedResults(orderedNodes, traffic)
+    : undefined
+
   return {
     performance,
     cost,
     security,
     availability,
     validation,
+    advanced,
   }
 }

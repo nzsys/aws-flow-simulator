@@ -11,6 +11,7 @@ type UIState = {
   readonly saveDialogOpen: boolean
   readonly loadDialogOpen: boolean
   readonly simulationPanelOpen: boolean
+  readonly advancedMode: boolean
   readonly connectionFeedback: ConnectionFeedback | null
 
   readonly setConfigPanelOpen: (open: boolean) => void
@@ -18,6 +19,7 @@ type UIState = {
   readonly setSaveDialogOpen: (open: boolean) => void
   readonly setLoadDialogOpen: (open: boolean) => void
   readonly toggleSimulationPanel: () => void
+  readonly toggleAdvancedMode: () => void
   readonly setConnectionFeedback: (feedback: ConnectionFeedback | null) => void
 }
 
@@ -27,6 +29,7 @@ export const useUIStore = create<UIState>((set) => ({
   saveDialogOpen: false,
   loadDialogOpen: false,
   simulationPanelOpen: false,
+  advancedMode: false,
   connectionFeedback: null,
 
   setConfigPanelOpen: (open) => set({ configPanelOpen: open }),
@@ -34,5 +37,6 @@ export const useUIStore = create<UIState>((set) => ({
   setSaveDialogOpen: (open) => set({ saveDialogOpen: open }),
   setLoadDialogOpen: (open) => set({ loadDialogOpen: open }),
   toggleSimulationPanel: () => set((state) => ({ simulationPanelOpen: !state.simulationPanelOpen })),
+  toggleAdvancedMode: () => set((state) => ({ advancedMode: !state.advancedMode })),
   setConnectionFeedback: (feedback) => set({ connectionFeedback: feedback }),
 }))

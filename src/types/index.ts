@@ -46,6 +46,14 @@ export type {
   AvailabilityResult,
   SimulationResult,
   SimulationRecord,
+  ServiceLatencyEntry,
+  LatencyBreakdownResult,
+  ScalabilityServiceEntry,
+  ScalabilityResult,
+  CostCategory,
+  CostCategoryEntry,
+  OperationalCostBreakdown,
+  AdvancedResult,
 } from './simulation'
 
 export {

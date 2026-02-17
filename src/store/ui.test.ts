@@ -8,6 +8,8 @@ beforeEach(() => {
     saveDialogOpen: false,
     loadDialogOpen: false,
     simulationPanelOpen: false,
+    advancedMode: false,
+    connectionFeedback: null,
   })
 })
 
@@ -45,5 +47,17 @@ describe('useUIStore', () => {
 
     useUIStore.getState().toggleSimulationPanel()
     expect(useUIStore.getState().simulationPanelOpen).toBe(false)
+  })
+
+  it('should start with advancedMode off', () => {
+    expect(useUIStore.getState().advancedMode).toBe(false)
+  })
+
+  it('should toggle advanced mode', () => {
+    useUIStore.getState().toggleAdvancedMode()
+    expect(useUIStore.getState().advancedMode).toBe(true)
+
+    useUIStore.getState().toggleAdvancedMode()
+    expect(useUIStore.getState().advancedMode).toBe(false)
   })
 })

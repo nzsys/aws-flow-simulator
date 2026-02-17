@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useSimulationStore } from '@/store/simulation'
 import { useArchitectureStore } from '@/store/architecture'
+import { useUIStore } from '@/store/ui'
 import { runSimulation } from '@/lib/simulation/engine'
 
 export function SimulationControls() {
@@ -12,6 +13,7 @@ export function SimulationControls() {
 
   const nodes = useArchitectureStore((s) => s.nodes)
   const edges = useArchitectureStore((s) => s.edges)
+  const advancedMode = useUIStore((s) => s.advancedMode)
 
   const handleRequestsChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -39,7 +41,7 @@ export function SimulationControls() {
   const handleRunSimulation = useCallback(async () => {
     setIsRunning(true)
     try {
-      const result = runSimulation(nodes, edges, trafficProfile)
+      const result = runSimulation(nodes, edges, trafficProfile, { advancedMode })
       setResults(result)
     } catch (error) {
       const message =
@@ -49,7 +51,7 @@ export function SimulationControls() {
     } finally {
       setIsRunning(false)
     }
-  }, [nodes, edges, trafficProfile, setIsRunning, setResults])
+  }, [nodes, edges, trafficProfile, advancedMode, setIsRunning, setResults])
 
   return (
     <div className="flex items-center gap-6 border-t border-slate-200 bg-white px-6 py-3">

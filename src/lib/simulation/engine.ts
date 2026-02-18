@@ -6,11 +6,33 @@ import type {
   SecurityResult,
   AvailabilityResult,
   AWSServiceType,
+  ServiceConfig,
 } from '@/types'
 import type { Node, Edge } from '@xyflow/react'
 import { validateArchitecture } from '@/lib/validation/validator'
 import { calculateAdvancedResults } from './advanced'
 import { getNodeData, getNodeConfig, getServiceType, isFlowNode } from './node-helpers'
+import {
+  calculateECSMonthlyCost,
+  calculateEKSMonthlyCost,
+  calculateEC2MonthlyCost,
+  calculateLambdaMonthlyCost,
+  calculateRDSMonthlyCost,
+  calculateElastiCacheMonthlyCost,
+  calculateSQSMonthlyCost,
+  calculateSNSMonthlyCost,
+  calculateKinesisMonthlyCost,
+  calculateALBMonthlyCost,
+  calculateNLBMonthlyCost,
+  calculateCloudFrontMonthlyCost,
+  calculateS3MonthlyCost,
+  calculateAPIGatewayMonthlyCost,
+  calculateDynamoDBMonthlyCost,
+  calculateWAFMonthlyCost,
+  calculateShieldMonthlyCost,
+  calculateRoute53MonthlyCost,
+  calculateNATGatewayMonthlyCost,
+} from '@/lib/costs/calculator'
 
 export type SimulationOptions = {
   readonly advancedMode?: boolean
@@ -133,14 +155,110 @@ export function calculatePerformance(
 
 // --- Cost Calculation ---
 
-function calculateDynamoDBRequestCost(
+function calculateServiceCostByType(
+  serviceType: AWSServiceType,
+  config: ServiceConfig,
+  specific: Record<string, unknown>,
   requestsPerMonth: number,
-  readWriteRatio: number,
+  dataTransferGB: number,
+  traffic: TrafficProfile,
 ): number {
-  const readCostPerMillion = 0.25
-  const writeCostPerMillion = 1.25
-  const millions = requestsPerMonth / 1_000_000
-  return millions * (readWriteRatio * readCostPerMillion + (1 - readWriteRatio) * writeCostPerMillion)
+  switch (serviceType) {
+    case 'route53':
+      return calculateRoute53MonthlyCost(requestsPerMonth)
+    case 'cloudfront':
+      return calculateCloudFrontMonthlyCost(requestsPerMonth, dataTransferGB)
+    case 'alb':
+      return calculateALBMonthlyCost(requestsPerMonth, dataTransferGB)
+    case 'nlb':
+      return calculateNLBMonthlyCost(requestsPerMonth, dataTransferGB)
+    case 'api-gateway':
+      return calculateAPIGatewayMonthlyCost(
+        (specific.apiType as string) ?? 'rest',
+        requestsPerMonth,
+        (specific.cachingEnabled as boolean) ?? false,
+      )
+    case 'ecs':
+      return calculateECSMonthlyCost(
+        (specific.launchType as string) ?? 'fargate',
+        (specific.taskCount as number) ?? 2,
+        (specific.cpu as number) ?? 0.25,
+        (specific.memory as number) ?? 0.5,
+      )
+    case 'eks':
+      return calculateEKSMonthlyCost(
+        (specific.nodeGroupType as string) ?? 'managed',
+        (specific.nodeCount as number) ?? 2,
+        (specific.instanceType as string) ?? 't3.medium',
+      )
+    case 'ec2':
+      return calculateEC2MonthlyCost(
+        (specific.instanceType as string) ?? 't3.micro',
+        (specific.instanceCount as number) ?? 1,
+      )
+    case 'lambda':
+      return calculateLambdaMonthlyCost(
+        (specific.memoryMB as number) ?? 128,
+        requestsPerMonth,
+        (specific.avgDurationMs as number) ?? 200,
+      )
+    case 's3':
+      return calculateS3MonthlyCost(requestsPerMonth, 0, traffic.readWriteRatio)
+    case 'rds':
+      return calculateRDSMonthlyCost(
+        (specific.instanceClass as string) ?? 'db.t3.micro',
+        (specific.multiAZ as boolean) ?? false,
+        (specific.readReplicas as number) ?? 0,
+        (specific.storageGB as number) ?? 20,
+      )
+    case 'dynamodb':
+      return calculateDynamoDBMonthlyCost(
+        (specific.capacityMode as string) ?? 'on-demand',
+        requestsPerMonth,
+        traffic.readWriteRatio,
+        (specific.readCapacityUnits as number) ?? 5,
+        (specific.writeCapacityUnits as number) ?? 5,
+        (specific.storageGB as number) ?? 50,
+      )
+    case 'elasticache':
+      return calculateElastiCacheMonthlyCost(
+        (specific.nodeType as string) ?? 'cache.t3.micro',
+        (specific.numNodes as number) ?? 1,
+      )
+    case 'sqs':
+      return calculateSQSMonthlyCost(
+        (specific.queueType as string) ?? 'standard',
+        requestsPerMonth,
+      )
+    case 'sns':
+      return calculateSNSMonthlyCost(
+        (specific.subscriptionCount as number) ?? 1,
+        requestsPerMonth,
+      )
+    case 'kinesis':
+      return calculateKinesisMonthlyCost(
+        (specific.streamMode as string) ?? 'on-demand',
+        (specific.shardCount as number) ?? 1,
+        dataTransferGB,
+      )
+    case 'waf':
+      return calculateWAFMonthlyCost(
+        (specific.ruleCount as number) ?? 10,
+        requestsPerMonth,
+      )
+    case 'shield':
+      return calculateShieldMonthlyCost((specific.tier as string) ?? 'standard')
+    case 'nat-gateway':
+      return calculateNATGatewayMonthlyCost(dataTransferGB)
+    default: {
+      // Infrastructure types (vpc, subnet, security-group, internet-gateway)
+      // are normally filtered by isFlowNode before reaching here.
+      const perRequestCost = (config.cost.perRequest ?? 0) * requestsPerMonth
+      const perGBCost = (config.cost.perGB ?? 0) * dataTransferGB
+      const monthlyCost = config.cost.monthly ?? 0
+      return perRequestCost + perGBCost + monthlyCost
+    }
+  }
 }
 
 function calculateNodeCost(
@@ -150,17 +268,14 @@ function calculateNodeCost(
 ): { readonly amount: number; readonly remainingFactor: number } {
   const config = getNodeConfig(node)
   const serviceType = getServiceType(node)
+  const specific = (config.specific as Record<string, unknown>) ?? {}
 
   const requestsPerMonth = effectiveRequestsPerSecond * 30 * 24 * 3600
   const dataTransferGB = (requestsPerMonth * traffic.averagePayloadSize) / (1024 * 1024)
 
-  const perRequestCost =
-    serviceType === 'dynamodb'
-      ? calculateDynamoDBRequestCost(requestsPerMonth, traffic.readWriteRatio)
-      : (config.cost.perRequest ?? 0) * requestsPerMonth
-  const perGBCost = (config.cost.perGB ?? 0) * dataTransferGB
-  const monthlyCost = config.cost.monthly ?? 0
-  const totalCost = perRequestCost + perGBCost + monthlyCost
+  const totalCost = calculateServiceCostByType(
+    serviceType, config, specific, requestsPerMonth, dataTransferGB, traffic,
+  )
 
   const cacheFactor =
     config.cache?.enabled && config.cache.hitRate ? 1 - config.cache.hitRate : 1

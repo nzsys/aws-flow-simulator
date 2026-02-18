@@ -23,9 +23,20 @@ import {
   calculateSQSMonthlyCost,
   calculateSNSMonthlyCost,
   calculateKinesisMonthlyCost,
+  calculateALBMonthlyCost,
+  calculateNLBMonthlyCost,
+  calculateCloudFrontMonthlyCost,
+  calculateS3MonthlyCost,
+  calculateAPIGatewayMonthlyCost,
+  calculateDynamoDBMonthlyCost,
+  calculateWAFMonthlyCost,
+  calculateShieldMonthlyCost,
+  calculateRoute53MonthlyCost,
+  calculateNATGatewayMonthlyCost,
 } from '@/lib/costs/calculator'
-import { AWS_COSTS } from '@/lib/constants/costs'
 import { getNodeConfig, getServiceType, isFlowNode } from './node-helpers'
+
+const SECONDS_PER_MONTH = 30 * 24 * 3600
 
 // --- Latency Breakdown ---
 
@@ -242,6 +253,8 @@ function calculateDetailedServiceCost(
   traffic: TrafficProfile,
 ): number {
   const specific = (config.specific as Record<string, unknown>) ?? {}
+  const requestsPerMonth = traffic.requestsPerSecond * SECONDS_PER_MONTH
+  const dataTransferGBPerMonth = (requestsPerMonth * traffic.averagePayloadSize) / (1024 * 1024)
 
   switch (serviceType) {
     case 'ecs': {
@@ -266,7 +279,11 @@ function calculateDetailedServiceCost(
       )
     }
     case 'lambda': {
-      return calculateLambdaMonthlyCost((specific.memoryMB as number) ?? 128)
+      return calculateLambdaMonthlyCost(
+        (specific.memoryMB as number) ?? 128,
+        requestsPerMonth,
+        (specific.avgDurationMs as number) ?? 200,
+      )
     }
     case 'rds': {
       return calculateRDSMonthlyCost(
@@ -283,36 +300,73 @@ function calculateDetailedServiceCost(
       )
     }
     case 'dynamodb': {
-      const requestsPerMonth = traffic.requestsPerSecond * 30 * 24 * 3600
-      const millions = requestsPerMonth / 1_000_000
-      const readCost = millions * traffic.readWriteRatio * AWS_COSTS.dynamodb.perMillionReadUnits
-      const writeCost = millions * (1 - traffic.readWriteRatio) * AWS_COSTS.dynamodb.perMillionWriteUnits
-      return readCost + writeCost
+      return calculateDynamoDBMonthlyCost(
+        (specific.capacityMode as string) ?? 'on-demand',
+        requestsPerMonth,
+        traffic.readWriteRatio,
+        (specific.readCapacityUnits as number) ?? 5,
+        (specific.writeCapacityUnits as number) ?? 5,
+        (specific.storageGB as number) ?? 50,
+      )
     }
     case 'sqs': {
-      return calculateSQSMonthlyCost((specific.queueType as string) ?? 'standard')
+      return calculateSQSMonthlyCost(
+        (specific.queueType as string) ?? 'standard',
+        requestsPerMonth,
+      )
     }
     case 'sns': {
-      return calculateSNSMonthlyCost((specific.subscriptionCount as number) ?? 1)
+      return calculateSNSMonthlyCost(
+        (specific.subscriptionCount as number) ?? 1,
+        requestsPerMonth,
+      )
     }
     case 'kinesis': {
       return calculateKinesisMonthlyCost(
         (specific.streamMode as string) ?? 'on-demand',
         (specific.shardCount as number) ?? 1,
+        dataTransferGBPerMonth,
       )
     }
     case 's3': {
-      const requestsPerMonth = traffic.requestsPerSecond * 30 * 24 * 3600
-      const dataGB = (requestsPerMonth * traffic.averagePayloadSize) / (1024 * 1024)
-      return dataGB * AWS_COSTS.s3.perGBPerMonth
+      return calculateS3MonthlyCost(
+        requestsPerMonth,
+        0,
+        traffic.readWriteRatio,
+      )
     }
     case 'cloudfront': {
-      const requestsPerMonth = traffic.requestsPerSecond * 30 * 24 * 3600
-      const dataGB = (requestsPerMonth * traffic.averagePayloadSize) / (1024 * 1024)
-      return dataGB * AWS_COSTS.cloudfront.perGBFirst10TB
+      return calculateCloudFrontMonthlyCost(requestsPerMonth, dataTransferGBPerMonth)
+    }
+    case 'alb': {
+      return calculateALBMonthlyCost(requestsPerMonth, dataTransferGBPerMonth)
+    }
+    case 'nlb': {
+      return calculateNLBMonthlyCost(requestsPerMonth, dataTransferGBPerMonth)
+    }
+    case 'api-gateway': {
+      return calculateAPIGatewayMonthlyCost(
+        (specific.apiType as string) ?? 'rest',
+        requestsPerMonth,
+        (specific.cachingEnabled as boolean) ?? false,
+      )
+    }
+    case 'waf': {
+      return calculateWAFMonthlyCost(
+        (specific.ruleCount as number) ?? 10,
+        requestsPerMonth,
+      )
+    }
+    case 'shield': {
+      return calculateShieldMonthlyCost((specific.tier as string) ?? 'standard')
+    }
+    case 'route53': {
+      return calculateRoute53MonthlyCost(requestsPerMonth)
+    }
+    case 'nat-gateway': {
+      return calculateNATGatewayMonthlyCost(dataTransferGBPerMonth)
     }
     default: {
-      const requestsPerMonth = traffic.requestsPerSecond * 30 * 24 * 3600
       const perRequestCost = (config.cost.perRequest ?? 0) * requestsPerMonth
       const monthlyCost = config.cost.monthly ?? 0
       return perRequestCost + monthlyCost
@@ -335,16 +389,25 @@ export function calculateCostBreakdown(
     return { service: config.name, category, amount }
   })
 
-  const compute = perService
+  const natGatewayNodes = orderedNodes.filter((n) => getServiceType(n) === 'nat-gateway')
+  const natEntries: CostCategoryEntry[] = natGatewayNodes.map((node) => {
+    const config = getNodeConfig(node)
+    const amount = calculateDetailedServiceCost('nat-gateway', config, traffic)
+    return { service: config.name, category: 'dataTransfer' as CostCategory, amount }
+  })
+
+  const allEntries = [...perService, ...natEntries]
+
+  const compute = allEntries
     .filter((e) => e.category === 'compute')
     .reduce((sum, e) => sum + e.amount, 0)
-  const storage = perService
+  const storage = allEntries
     .filter((e) => e.category === 'storage')
     .reduce((sum, e) => sum + e.amount, 0)
-  const dataTransfer = perService
+  const dataTransfer = allEntries
     .filter((e) => e.category === 'dataTransfer')
     .reduce((sum, e) => sum + e.amount, 0)
-  const requests = perService
+  const requests = allEntries
     .filter((e) => e.category === 'requests')
     .reduce((sum, e) => sum + e.amount, 0)
 
@@ -353,7 +416,7 @@ export function calculateCostBreakdown(
     storage: Math.round(storage * 100) / 100,
     dataTransfer: Math.round(dataTransfer * 100) / 100,
     requests: Math.round(requests * 100) / 100,
-    perService,
+    perService: allEntries,
   }
 }
 

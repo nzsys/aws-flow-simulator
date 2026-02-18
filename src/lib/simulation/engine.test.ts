@@ -156,14 +156,16 @@ describe('calculatePerformance', () => {
 describe('calculateCost', () => {
   it('should aggregate monthly costs', () => {
     const nodes = [
-      createTestNode('alb'), // monthly: 16.2
-      createTestNode('rds'), // monthly: 25
+      createTestNode('alb'),
+      createTestNode('rds'),
     ]
     const traffic = createTestTrafficProfile({ requestsPerSecond: 0 })
 
     const result = calculateCost(nodes, traffic)
 
-    expect(result.monthly).toBeCloseTo(41.2)
+    // ALB: 0.0225 * 730 = 16.425 (fixed cost, 0 LCU at 0 RPS)
+    // RDS: 0.017 * 730 + 20 * 0.115 = 12.41 + 2.30 = 14.71
+    expect(result.monthly).toBeCloseTo(31.14, 0)
   })
 
   it('should calculate per-request costs', () => {
@@ -172,9 +174,9 @@ describe('calculateCost', () => {
 
     const result = calculateCost(nodes, traffic)
 
-    const expectedRequestsPerMonth = 100 * 30 * 24 * 3600
-    const expectedPerRequestTotal = 0.0000005 * expectedRequestsPerMonth
-    const expectedMonthly = expectedPerRequestTotal + 0.5
+    // Route53: hostedZone($0.50) + (259,200,000 / 1M) * $0.40 = $0.50 + $103.68 = $104.18
+    const requestsPerMonth = 100 * 30 * 24 * 3600
+    const expectedMonthly = 0.5 + (requestsPerMonth / 1_000_000) * 0.4
 
     expect(result.monthly).toBeCloseTo(expectedMonthly, 0)
   })
@@ -217,15 +219,228 @@ describe('calculateCost', () => {
 
   it('should exclude infrastructure nodes from cost calculation', () => {
     const nodes = [
-      createTestNode('alb'), // monthly: 16.2
+      createTestNode('alb'),
       createTestNode('vpc'), // infra, should be excluded
     ]
     const traffic = createTestTrafficProfile({ requestsPerSecond: 0 })
 
     const result = calculateCost(nodes, traffic)
 
-    expect(result.monthly).toBeCloseTo(16.2)
+    // ALB: 0.0225 * 730 = 16.425 (fixed cost only at 0 RPS)
+    expect(result.monthly).toBeCloseTo(16.43, 0)
     expect(result.breakdown).toHaveLength(1)
+  })
+
+  it('should calculate ECS Fargate cost from vCPU and memory', () => {
+    const nodes = [createTestNode('ecs')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 0 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // ECS Fargate: 0.04048 * 730 * 0.25 * 2 + 0.004445 * 730 * 0.5 * 2 = 14.78 + 3.25 = ~18.03
+    expect(result.monthly).toBeGreaterThan(15)
+    expect(result.monthly).toBeLessThan(25)
+  })
+
+  it('should calculate EKS cost including worker nodes', () => {
+    const nodes = [createTestNode('eks')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 0 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // EKS: control plane (0.10 * 730 = $73) + 2 t3.medium nodes (0.0416 * 730 * 2 = $60.74) = ~$133.74
+    expect(result.monthly).toBeGreaterThan(130)
+    expect(result.monthly).toBeLessThan(140)
+  })
+
+  it('should calculate EC2 cost based on instance type and count', () => {
+    const nodes = [createTestNode('ec2', {
+      config: { specific: { instanceType: 't3.medium', instanceCount: 3, autoScaling: false } },
+    })]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 0 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // EC2: 0.0416 * 730 * 3 = ~$91.10
+    expect(result.monthly).toBeCloseTo(91.1, 0)
+  })
+
+  it('should calculate Lambda cost including GB-second compute', () => {
+    const nodes = [createTestNode('lambda')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // Lambda: request cost + GB-second compute cost
+    // Requests: (259.2M / 1M) * $0.20 = $51.84
+    // GB-seconds: (128/1024) * (200/1000) * 259200000 * $0.0000166667 = ~$108
+    // Total: ~$160
+    expect(result.monthly).toBeGreaterThan(150)
+    expect(result.monthly).toBeLessThan(170)
+  })
+
+  it('should calculate S3 cost with GET/PUT differentiation', () => {
+    const nodes = [createTestNode('s3')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100, readWriteRatio: 0.7 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // S3: GET (259.2M * 0.7 / 1000) * $0.0004 + PUT (259.2M * 0.3 / 1000) * $0.005
+    // GET: 181440 * 0.0004 = $72.58
+    // PUT: 77760 * 0.005 = $388.80
+    // Total: ~$461
+    expect(result.monthly).toBeGreaterThan(400)
+  })
+
+  it('should calculate RDS cost based on instance class and storage', () => {
+    const nodes = [createTestNode('rds', {
+      config: { specific: { instanceClass: 'db.t3.medium', multiAZ: true, readReplicas: 1, storageGB: 100 } },
+    })]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 0 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // RDS: (0.068 * 730 * 2) + (0.068 * 730 * 1) + (100 * 0.115 * 2) = $99.28 + $49.64 + $23.00 = ~$171.92
+    expect(result.monthly).toBeGreaterThan(160)
+    expect(result.monthly).toBeLessThan(180)
+  })
+
+  it('should calculate DynamoDB cost with storage', () => {
+    const nodes = [createTestNode('dynamodb')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100, readWriteRatio: 0.8 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // DynamoDB on-demand: reads + writes + storage
+    // Storage: 50 * $0.25 = $12.50
+    // Reads: (259.2) * 0.8 * $0.25 = $51.84
+    // Writes: (259.2) * 0.2 * $1.25 = $64.80
+    // Total: ~$129
+    expect(result.monthly).toBeGreaterThan(120)
+    expect(result.monthly).toBeLessThan(140)
+  })
+
+  it('should calculate ElastiCache cost scaling with node count', () => {
+    const nodes = [createTestNode('elasticache', {
+      config: { specific: { engine: 'redis', nodeType: 'cache.t3.small', numNodes: 3, clusterMode: false } },
+    })]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 0 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // ElastiCache: 0.034 * 730 * 3 = ~$74.46
+    expect(result.monthly).toBeCloseTo(74.46, 0)
+  })
+
+  it('should calculate SQS cost from traffic', () => {
+    const nodes = [createTestNode('sqs')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // SQS standard: (259.2M / 1M) * $0.40 = $103.68
+    expect(result.monthly).toBeCloseTo(103.68, 0)
+  })
+
+  it('should calculate SNS cost including delivery', () => {
+    const nodes = [createTestNode('sns')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // SNS: publish (259.2 * $0.50) + delivery (259.2 * 1 * $0.09) = $129.60 + $23.33 = ~$152.93
+    expect(result.monthly).toBeGreaterThan(140)
+    expect(result.monthly).toBeLessThan(160)
+  })
+
+  it('should calculate Kinesis on-demand cost from data transfer', () => {
+    const nodes = [createTestNode('kinesis')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // Kinesis on-demand should now have non-zero cost
+    expect(result.monthly).toBeGreaterThan(0)
+  })
+
+  it('should calculate NLB cost with NLCU', () => {
+    const nodes = [createTestNode('nlb')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // NLB: fixed (0.0225 * 730 = $16.43) + NLCU costs
+    expect(result.monthly).toBeGreaterThan(16)
+  })
+
+  it('should calculate API Gateway HTTP type cost', () => {
+    const nodes = [createTestNode('api-gateway', {
+      config: { specific: { apiType: 'http', throttlingRate: 10000, throttlingBurst: 5000, cachingEnabled: false } },
+    })]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // HTTP API: (259.2M / 1M) * $1.00 = $259.20
+    expect(result.monthly).toBeCloseTo(259.2, 0)
+  })
+
+  it('should calculate Shield advanced cost', () => {
+    const nodes = [createTestNode('shield', {
+      config: { specific: { tier: 'advanced' } },
+    })]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 0 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // Shield Advanced: $3000/month
+    expect(result.monthly).toBe(3000)
+  })
+
+  it('should calculate CloudFront cost with request pricing', () => {
+    const nodes = [createTestNode('cloudfront', {
+      config: { cache: { enabled: false, ttl: 0, hitRate: 0 } },
+    })]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // CloudFront: data transfer + request cost
+    expect(result.monthly).toBeGreaterThan(0)
+  })
+
+  it('should calculate WAF cost including rule count', () => {
+    const nodes = [createTestNode('waf')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCost(nodes, traffic)
+
+    // WAF: $5 WebACL + $10 (10 rules * $1) + request cost
+    // requestsPerMonth = 100 * 30 * 24 * 3600 = 259,200,000
+    // requestCost = (259.2) * $0.6 = $155.52
+    // Total = $5 + $10 + $155.52 = $170.52
+    expect(result.monthly).toBeGreaterThan(15)
+    const wafBreakdown = result.breakdown.find((b) => b.service === 'WAF')
+    expect(wafBreakdown).toBeDefined()
+    expect(wafBreakdown!.amount).toBeCloseTo(170.52, 0)
+  })
+
+  it('should increase total cost when WAF is added', () => {
+    const baseNodes = [
+      createTestNode('alb'),
+      createTestNode('ecs'),
+    ]
+    const withWafNodes = [
+      createTestNode('waf'),
+      createTestNode('alb'),
+      createTestNode('ecs'),
+    ]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const baseResult = calculateCost(baseNodes, traffic)
+    const wafResult = calculateCost(withWafNodes, traffic)
+
+    expect(wafResult.monthly).toBeGreaterThan(baseResult.monthly)
   })
 })
 

@@ -132,7 +132,7 @@ describe('calculateScalability', () => {
   it('should calculate headroom correctly', () => {
     const nodes = [
       createTestNode('lambda', {
-        config: { specific: { memoryMB: 128, timeoutSeconds: 30, concurrency: 1000, runtime: 'nodejs20.x' } },
+        config: { specific: { memoryMB: 128, timeoutSeconds: 30, concurrency: 1000, runtime: 'nodejs20.x', avgDurationMs: 200 } },
       }),
     ]
     const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
@@ -357,6 +357,175 @@ describe('calculateCostBreakdown', () => {
 
     expect(result.perService[0].category).toBe('requests')
     expect(result.perService[0].amount).toBeGreaterThan(0)
+  })
+
+  it('should calculate Lambda cost from traffic', () => {
+    const nodes = [createTestNode('lambda')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.perService[0].category).toBe('compute')
+    expect(result.compute).toBeGreaterThan(0)
+  })
+
+  it('should calculate EC2 cost', () => {
+    const nodes = [createTestNode('ec2')]
+    const traffic = createTestTrafficProfile()
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.perService[0].category).toBe('compute')
+    expect(result.compute).toBeGreaterThan(0)
+  })
+
+  it('should calculate EKS cost', () => {
+    const nodes = [createTestNode('eks')]
+    const traffic = createTestTrafficProfile()
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.perService[0].category).toBe('compute')
+    expect(result.compute).toBeGreaterThan(0)
+  })
+
+  it('should calculate ElastiCache cost', () => {
+    const nodes = [createTestNode('elasticache')]
+    const traffic = createTestTrafficProfile()
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.perService[0].category).toBe('storage')
+    expect(result.storage).toBeGreaterThan(0)
+  })
+
+  it('should calculate S3 cost with request charges', () => {
+    const nodes = [createTestNode('s3')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.perService[0].category).toBe('storage')
+    expect(result.storage).toBeGreaterThan(0)
+  })
+
+  it('should calculate ALB cost with LCU', () => {
+    const nodes = [createTestNode('alb')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.perService[0].category).toBe('requests')
+    expect(result.requests).toBeGreaterThan(0)
+  })
+
+  it('should calculate NLB cost with NLCU', () => {
+    const nodes = [createTestNode('nlb')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.perService[0].category).toBe('requests')
+    expect(result.requests).toBeGreaterThan(0)
+  })
+
+  it('should calculate SNS cost from traffic', () => {
+    const nodes = [createTestNode('sns')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.perService[0].category).toBe('requests')
+    expect(result.perService[0].amount).toBeGreaterThan(0)
+  })
+
+  it('should calculate Kinesis cost for on-demand mode', () => {
+    const nodes = [createTestNode('kinesis')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.perService[0].category).toBe('requests')
+    expect(result.perService[0].amount).toBeGreaterThan(0)
+  })
+
+  it('should calculate WAF cost with rules and requests', () => {
+    const nodes = [createTestNode('waf')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.perService[0].category).toBe('requests')
+    expect(result.perService[0].amount).toBeGreaterThan(0)
+  })
+
+  it('should calculate Shield standard cost as 0', () => {
+    const nodes = [createTestNode('shield')]
+    const traffic = createTestTrafficProfile()
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.perService[0].category).toBe('requests')
+    expect(result.perService[0].amount).toBe(0)
+  })
+
+  it('should calculate Route53 cost with queries', () => {
+    const nodes = [createTestNode('route53')]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.perService[0].category).toBe('requests')
+    expect(result.perService[0].amount).toBeGreaterThan(0)
+  })
+
+  it('should calculate DynamoDB provisioned cost', () => {
+    const nodes = [createTestNode('dynamodb', {
+      config: {
+        specific: {
+          capacityMode: 'provisioned' as const,
+          readCapacityUnits: 100,
+          writeCapacityUnits: 50,
+          globalTables: false,
+          storageGB: 50,
+        },
+      },
+    })]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.storage).toBeGreaterThan(0)
+  })
+
+  it('should include NAT Gateway costs from infrastructure nodes', () => {
+    const nodes = [
+      createTestNode('ecs'),
+      createTestNode('nat-gateway'),
+    ]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.dataTransfer).toBeGreaterThan(0)
+  })
+
+  it('should calculate a full realistic architecture cost', () => {
+    const nodes = [
+      createTestNode('route53'),
+      createTestNode('cloudfront'),
+      createTestNode('alb'),
+      createTestNode('ecs'),
+      createTestNode('rds'),
+    ]
+    const traffic = createTestTrafficProfile({ requestsPerSecond: 100 })
+
+    const result = calculateCostBreakdown(nodes, traffic)
+
+    expect(result.compute).toBeGreaterThan(0)
+    expect(result.storage).toBeGreaterThan(0)
+    expect(result.dataTransfer).toBeGreaterThan(0)
+    expect(result.requests).toBeGreaterThan(0)
   })
 })
 

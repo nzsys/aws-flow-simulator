@@ -76,6 +76,7 @@ export type LambdaConfig = {
   readonly timeoutSeconds: number
   readonly concurrency: number
   readonly runtime: string
+  readonly avgDurationMs: number
 }
 
 export type RDSConfig = {
@@ -90,6 +91,7 @@ export type DynamoDBConfig = {
   readonly readCapacityUnits: number
   readonly writeCapacityUnits: number
   readonly globalTables: boolean
+  readonly storageGB: number
 }
 
 export type S3Config = {

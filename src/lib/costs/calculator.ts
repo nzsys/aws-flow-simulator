@@ -56,16 +56,17 @@ export function calculateECSMonthlyCost(
     const memoryCost = memory * AWS_COSTS.ecs.fargateMemoryPerGBPerHour * HOURS_PER_MONTH * taskCount
     return cpuCost + memoryCost
   }
-  // EC2 launch type: cost is managed via EC2 instances directly
   return 0
 }
 
-export function calculateLambdaMonthlyCost(memoryMB: number): number {
-  // Estimate: 1M invocations/month, 200ms avg duration
-  const invocations = 1_000_000
-  const avgDurationSeconds = 0.2
-  const requestCost = (invocations / 1_000_000) * AWS_COSTS.lambda.perMillionRequests
-  const gbSeconds = (memoryMB / 1024) * avgDurationSeconds * invocations
+export function calculateLambdaMonthlyCost(
+  memoryMB: number,
+  requestsPerMonth: number,
+  avgDurationMs: number,
+): number {
+  const avgDurationSeconds = avgDurationMs / 1000
+  const requestCost = (requestsPerMonth / 1_000_000) * AWS_COSTS.lambda.perMillionRequests
+  const gbSeconds = (memoryMB / 1024) * avgDurationSeconds * requestsPerMonth
   const computeCost = gbSeconds * AWS_COSTS.lambda.perGBSecond
   return requestCost + computeCost
 }
@@ -98,31 +99,147 @@ export function calculateEKSMonthlyCost(
   return controlPlaneCost + nodeCost
 }
 
-export function calculateSQSMonthlyCost(queueType: string): number {
+export function calculateSQSMonthlyCost(
+  queueType: string,
+  messagesPerMonth: number,
+): number {
   const ratePerMillion =
     queueType === 'fifo' ? AWS_COSTS.sqs.perMillionRequestsFifo : AWS_COSTS.sqs.perMillionRequests
-  // Estimate: 10M messages/month
-  return (10_000_000 / 1_000_000) * ratePerMillion
+  return (messagesPerMonth / 1_000_000) * ratePerMillion
 }
 
-export function calculateSNSMonthlyCost(subscriptionCount: number): number {
-  // Estimate: 1M publishes/month
-  const publishCost = (1_000_000 / 1_000_000) * AWS_COSTS.sns.perMillionPublishes
+export function calculateSNSMonthlyCost(
+  subscriptionCount: number,
+  publishesPerMonth: number,
+): number {
+  const publishCost = (publishesPerMonth / 1_000_000) * AWS_COSTS.sns.perMillionPublishes
   const deliveryCost =
-    (1_000_000 * subscriptionCount / 1_000_000) * AWS_COSTS.sns.perMillionDeliveries
+    (publishesPerMonth * subscriptionCount / 1_000_000) * AWS_COSTS.sns.perMillionDeliveries
   return publishCost + deliveryCost
 }
 
 export function calculateKinesisMonthlyCost(
   streamMode: string,
   shardCount: number,
+  dataTransferGBPerMonth: number,
 ): number {
   if (streamMode === 'on-demand') {
-    return 0
+    const ingestCost = dataTransferGBPerMonth * AWS_COSTS.kinesis.perGBIngested
+    const estimatedShards = Math.max(1, Math.ceil(dataTransferGBPerMonth / 730))
+    const shardCost = estimatedShards * AWS_COSTS.kinesis.shardHourProvisioned * HOURS_PER_MONTH
+    return ingestCost + shardCost
   }
   const shardCost = shardCount * AWS_COSTS.kinesis.shardHourProvisioned * HOURS_PER_MONTH
   const putCost = shardCount * AWS_COSTS.kinesis.perShardHour * HOURS_PER_MONTH
   return shardCost + putCost
+}
+
+export function calculateALBMonthlyCost(
+  requestsPerMonth: number,
+  dataTransferGBPerMonth: number,
+): number {
+  const fixedCost = AWS_COSTS.alb.perHour * HOURS_PER_MONTH
+  const connectionsLCU = requestsPerMonth / (25 * 60 * HOURS_PER_MONTH)
+  const processedBytesLCU = dataTransferGBPerMonth
+  const lcuUsage = Math.max(connectionsLCU, processedBytesLCU)
+  const lcuCost = lcuUsage * AWS_COSTS.alb.perLCU * HOURS_PER_MONTH
+  return fixedCost + lcuCost
+}
+
+export function calculateNLBMonthlyCost(
+  requestsPerMonth: number,
+  dataTransferGBPerMonth: number,
+): number {
+  const fixedCost = AWS_COSTS.nlb.perHour * HOURS_PER_MONTH
+  const connectionsNLCU = requestsPerMonth / (800 * 60 * HOURS_PER_MONTH)
+  const processedBytesNLCU = dataTransferGBPerMonth
+  const nlcuUsage = Math.max(connectionsNLCU, processedBytesNLCU)
+  const nlcuCost = nlcuUsage * AWS_COSTS.nlb.perNLCU * HOURS_PER_MONTH
+  return fixedCost + nlcuCost
+}
+
+export function calculateCloudFrontMonthlyCost(
+  requestsPerMonth: number,
+  dataTransferGBPerMonth: number,
+): number {
+  const dataTransferCost = dataTransferGBPerMonth * AWS_COSTS.cloudfront.perGBFirst10TB
+  const requestCost = (requestsPerMonth / 10_000) * AWS_COSTS.cloudfront.per10000Requests
+  return dataTransferCost + requestCost
+}
+
+export function calculateS3MonthlyCost(
+  requestsPerMonth: number,
+  storageGB: number,
+  readWriteRatio: number,
+): number {
+  const storageCost = storageGB * AWS_COSTS.s3.perGBPerMonth
+  const readRequests = requestsPerMonth * readWriteRatio
+  const writeRequests = requestsPerMonth * (1 - readWriteRatio)
+  const getCost = (readRequests / 1000) * AWS_COSTS.s3.per1000GETRequests
+  const putCost = (writeRequests / 1000) * AWS_COSTS.s3.per1000PUTRequests
+  return storageCost + getCost + putCost
+}
+
+export function calculateAPIGatewayMonthlyCost(
+  apiType: string,
+  requestsPerMonth: number,
+  cachingEnabled: boolean,
+): number {
+  const ratePerMillion =
+    apiType === 'http'
+      ? AWS_COSTS['api-gateway'].perMillionRequestsHttp
+      : AWS_COSTS['api-gateway'].perMillionRequestsRest
+  const requestCost = (requestsPerMonth / 1_000_000) * ratePerMillion
+  const cacheCost = cachingEnabled ? AWS_COSTS['api-gateway'].cachingPerHour * HOURS_PER_MONTH : 0
+  return requestCost + cacheCost
+}
+
+export function calculateDynamoDBMonthlyCost(
+  capacityMode: string,
+  requestsPerMonth: number,
+  readWriteRatio: number,
+  rcu: number,
+  wcu: number,
+  storageGB: number,
+): number {
+  const storageCost = storageGB * AWS_COSTS.dynamodb.storagePerGBPerMonth
+
+  if (capacityMode === 'provisioned') {
+    const rcuCost = rcu * AWS_COSTS.dynamodb.provisionedRCUPerHour * HOURS_PER_MONTH
+    const wcuCost = wcu * AWS_COSTS.dynamodb.provisionedWCUPerHour * HOURS_PER_MONTH
+    return rcuCost + wcuCost + storageCost
+  }
+
+  const millions = requestsPerMonth / 1_000_000
+  const readCost = millions * readWriteRatio * AWS_COSTS.dynamodb.onDemandReadPerMillion
+  const writeCost = millions * (1 - readWriteRatio) * AWS_COSTS.dynamodb.onDemandWritePerMillion
+  return readCost + writeCost + storageCost
+}
+
+export function calculateWAFMonthlyCost(
+  ruleCount: number,
+  requestsPerMonth: number,
+): number {
+  const webACLCost = AWS_COSTS.waf.perWebACLMonthly
+  const ruleCost = ruleCount * AWS_COSTS.waf.perRuleMonthly
+  const requestCost = (requestsPerMonth / 1_000_000) * AWS_COSTS.waf.perMillionRequests
+  return webACLCost + ruleCost + requestCost
+}
+
+export function calculateShieldMonthlyCost(tier: string): number {
+  return tier === 'advanced' ? AWS_COSTS.shield.advancedMonthly : AWS_COSTS.shield.standardMonthly
+}
+
+export function calculateRoute53MonthlyCost(requestsPerMonth: number): number {
+  const hostedZoneCost = AWS_COSTS.route53.hostedZoneMonthly
+  const queryCost = (requestsPerMonth / 1_000_000) * AWS_COSTS.route53.perMillionQueries
+  return hostedZoneCost + queryCost
+}
+
+export function calculateNATGatewayMonthlyCost(dataTransferGBPerMonth: number): number {
+  const fixedCost = AWS_COSTS['nat-gateway'].perHour * HOURS_PER_MONTH
+  const dataCost = dataTransferGBPerMonth * AWS_COSTS['nat-gateway'].perGBProcessed
+  return fixedCost + dataCost
 }
 
 export const EKS_INSTANCE_TYPES = [
@@ -164,3 +281,7 @@ export const ELASTICACHE_NODE_TYPES = [
   'cache.t3.small',
   'cache.t3.medium',
 ] as const
+
+export const DYNAMODB_CAPACITY_MODES = ['on-demand', 'provisioned'] as const
+
+export const API_GATEWAY_TYPES = ['rest', 'http', 'websocket'] as const

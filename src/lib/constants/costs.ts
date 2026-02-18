@@ -16,7 +16,8 @@ export const AWS_COSTS = {
     perNLCU: 0.006,
   },
   'api-gateway': {
-    perMillionRequests: 3.5,
+    perMillionRequestsRest: 3.5,
+    perMillionRequestsHttp: 1.0,
     cachingPerHour: 0.02,
   },
   ecs: {
@@ -48,8 +49,10 @@ export const AWS_COSTS = {
     multiAZMultiplier: 2,
   },
   dynamodb: {
-    perMillionReadUnits: 0.25,
-    perMillionWriteUnits: 1.25,
+    onDemandReadPerMillion: 0.25,
+    onDemandWritePerMillion: 1.25,
+    provisionedRCUPerHour: 0.00013,
+    provisionedWCUPerHour: 0.00065,
     storagePerGBPerMonth: 0.25,
   },
   elasticache: {

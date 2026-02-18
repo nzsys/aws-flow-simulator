@@ -318,7 +318,7 @@ function LambdaPanel({
   function handleMemoryChange(value: string) {
     const memoryMB = parseInt(value, 10)
     const updated = { ...specific, memoryMB }
-    const cost = calculateLambdaMonthlyCost(memoryMB)
+    const cost = calculateLambdaMonthlyCost(memoryMB, 1_000_000, specific.avgDurationMs)
     updateSpecificAndCost(config, updated, cost, updateConfig)
   }
 
@@ -506,7 +506,7 @@ function SQSPanel({
   function handleQueueTypeChange(value: string) {
     const queueType = value as 'standard' | 'fifo'
     const updated = { ...specific, queueType }
-    const cost = calculateSQSMonthlyCost(queueType)
+    const cost = calculateSQSMonthlyCost(queueType, 10_000_000)
     updateSpecificAndCost(config, updated, cost, updateConfig)
   }
 
